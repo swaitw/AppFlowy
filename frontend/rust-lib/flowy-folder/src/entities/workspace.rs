@@ -1,12 +1,15 @@
+use std::convert::TryInto;
+
+use collab::core::collab_state::SyncState;
+use collab_folder::Workspace;
+
+use flowy_derive::ProtoBuf;
+use flowy_error::ErrorCode;
+
 use crate::{
   entities::parser::workspace::{WorkspaceDesc, WorkspaceIdentify, WorkspaceName},
-  entities::{app::RepeatedAppPB, view::ViewPB},
-  errors::*,
-  impl_def_and_def_mut,
+  entities::view::ViewPB,
 };
-use flowy_derive::ProtoBuf;
-use folder_model::WorkspaceRevision;
-use std::convert::TryInto;
 
 #[derive(Eq, PartialEq, ProtoBuf, Default, Debug, Clone)]
 pub struct WorkspacePB {
@@ -17,37 +20,46 @@ pub struct WorkspacePB {
   pub name: String,
 
   #[pb(index = 3)]
-  pub desc: String,
+  pub views: Vec<ViewPB>,
 
   #[pb(index = 4)]
-  pub apps: RepeatedAppPB,
-
-  #[pb(index = 5)]
-  pub modified_time: i64,
-
-  #[pb(index = 6)]
   pub create_time: i64,
 }
 
-impl std::convert::From<WorkspaceRevision> for WorkspacePB {
-  fn from(workspace_serde: WorkspaceRevision) -> Self {
+impl std::convert::From<(Workspace, Vec<ViewPB>)> for WorkspacePB {
+  fn from(params: (Workspace, Vec<ViewPB>)) -> Self {
+    let (workspace, views) = params;
     WorkspacePB {
-      id: workspace_serde.id,
-      name: workspace_serde.name,
-      desc: workspace_serde.desc,
-      apps: workspace_serde.apps.into(),
-      modified_time: workspace_serde.modified_time,
-      create_time: workspace_serde.create_time,
+      id: workspace.id,
+      name: workspace.name,
+      views,
+      create_time: workspace.created_at,
     }
   }
 }
+
+// impl std::convert::From<Workspace> for WorkspacePB {
+//   fn from(workspace: Workspace) -> Self {
+//     WorkspacePB {
+//       id: workspace.id,
+//       name: workspace.name,
+//       views: Default::default(),
+//       create_time: workspace.created_at,
+//     }
+//   }
+// }
+
 #[derive(PartialEq, Eq, Debug, Default, ProtoBuf)]
 pub struct RepeatedWorkspacePB {
   #[pb(index = 1)]
   pub items: Vec<WorkspacePB>,
 }
 
-impl_def_and_def_mut!(RepeatedWorkspacePB, WorkspacePB);
+impl From<Vec<WorkspacePB>> for RepeatedWorkspacePB {
+  fn from(workspaces: Vec<WorkspacePB>) -> Self {
+    Self { items: workspaces }
+  }
+}
 
 #[derive(ProtoBuf, Default)]
 pub struct CreateWorkspacePayloadPB {
@@ -81,22 +93,50 @@ impl TryInto<CreateWorkspaceParams> for CreateWorkspacePayloadPB {
 // Read all workspaces if the workspace_id is None
 #[derive(Clone, ProtoBuf, Default, Debug)]
 pub struct WorkspaceIdPB {
-  #[pb(index = 1, one_of)]
-  pub value: Option<String>,
+  #[pb(index = 1)]
+  pub value: String,
 }
 
-impl WorkspaceIdPB {
-  pub fn new(workspace_id: Option<String>) -> Self {
-    Self {
-      value: workspace_id,
-    }
+#[derive(Clone, Debug)]
+pub struct WorkspaceIdParams {
+  pub value: String,
+}
+
+impl TryInto<WorkspaceIdParams> for WorkspaceIdPB {
+  type Error = ErrorCode;
+
+  fn try_into(self) -> Result<WorkspaceIdParams, Self::Error> {
+    Ok(WorkspaceIdParams {
+      value: WorkspaceIdentify::parse(self.value)?.0,
+    })
   }
 }
 
-#[derive(Default, ProtoBuf, Clone)]
+#[derive(Clone, ProtoBuf, Default, Debug)]
+pub struct GetWorkspaceViewPB {
+  #[pb(index = 1)]
+  pub value: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct GetWorkspaceViewParams {
+  pub value: String,
+}
+
+impl TryInto<GetWorkspaceViewParams> for GetWorkspaceViewPB {
+  type Error = ErrorCode;
+
+  fn try_into(self) -> Result<GetWorkspaceViewParams, Self::Error> {
+    Ok(GetWorkspaceViewParams {
+      value: WorkspaceIdentify::parse(self.value)?.0,
+    })
+  }
+}
+
+#[derive(Default, ProtoBuf, Debug, Clone)]
 pub struct WorkspaceSettingPB {
   #[pb(index = 1)]
-  pub workspace: WorkspacePB,
+  pub workspace_id: String,
 
   #[pb(index = 2, one_of)]
   pub latest_view: Option<ViewPB>,
@@ -137,4 +177,58 @@ impl TryInto<UpdateWorkspaceParams> for UpdateWorkspacePayloadPB {
       desc: self.desc,
     })
   }
+}
+
+#[derive(Debug, Default, ProtoBuf)]
+pub struct RepeatedFolderSnapshotPB {
+  #[pb(index = 1)]
+  pub items: Vec<FolderSnapshotPB>,
+}
+
+#[derive(Debug, Default, ProtoBuf)]
+pub struct FolderSnapshotPB {
+  #[pb(index = 1)]
+  pub snapshot_id: i64,
+
+  #[pb(index = 2)]
+  pub snapshot_desc: String,
+
+  #[pb(index = 3)]
+  pub created_at: i64,
+
+  #[pb(index = 4)]
+  pub data: Vec<u8>,
+}
+
+#[derive(Debug, Default, ProtoBuf)]
+pub struct FolderSnapshotStatePB {
+  #[pb(index = 1)]
+  pub new_snapshot_id: i64,
+}
+
+#[derive(Debug, Default, ProtoBuf)]
+pub struct FolderSyncStatePB {
+  #[pb(index = 1)]
+  pub is_syncing: bool,
+
+  #[pb(index = 2)]
+  pub is_finish: bool,
+}
+
+impl From<SyncState> for FolderSyncStatePB {
+  fn from(value: SyncState) -> Self {
+    Self {
+      is_syncing: value.is_syncing(),
+      is_finish: value.is_sync_finished(),
+    }
+  }
+}
+
+#[derive(ProtoBuf, Default)]
+pub struct UserFolderPB {
+  #[pb(index = 1)]
+  pub uid: i64,
+
+  #[pb(index = 2)]
+  pub workspace_id: String,
 }
